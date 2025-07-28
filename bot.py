@@ -1,6 +1,6 @@
 import sqlite3
 import os
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -104,11 +104,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Bem-vindo de volta ao Bot Financeiro!", reply_markup=teclado_principal)
     return TIPO
 
-# --- Funções simuladas ---
 async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Função escolher_tipo em construção.")
-    return ConversationHandler.END
+    texto = update.message.text
 
+    if texto == "💰 Adicionar Receita":
+        await update.message.reply_text("Você escolheu adicionar uma receita. (Função em construção...)")
+        return ConversationHandler.END
+
+    elif texto == "🛒 Adicionar Despesa":
+        await update.message.reply_text("Você escolheu adicionar uma despesa. (Função em construção...)")
+        return ConversationHandler.END
+
+    elif texto == "📊 Relatório":
+        await update.message.reply_text("Você escolheu ver o relatório. (Função em construção...)")
+        return ConversationHandler.END
+
+    elif texto == "💵 Saldo":
+        saldo = calcular_saldo()
+        await update.message.reply_text(f"Seu saldo atual é: R$ {saldo:.2f}")
+        return TIPO
+
+    elif texto == "📅 Adicionar Despesa Agendada":
+        await update.message.reply_text("Adicionar despesa agendada. (Função em construção...)")
+        return ConversationHandler.END
+
+    elif texto == "📋 Ver Despesas Agendadas":
+        await update.message.reply_text("Ver despesas agendadas. (Função em construção...)")
+        return ConversationHandler.END
+
+    elif texto == "🖑️ Excluir Transação":
+        await update.message.reply_text("Excluir transação. (Função em construção...)")
+        return ConversationHandler.END
+
+    elif texto == "❌ Cancelar":
+        await update.message.reply_text("Operação cancelada.", reply_markup=teclado_principal)
+        return TIPO
+
+    else:
+        await update.message.reply_text("Opção inválida. Por favor, escolha uma opção válida.", reply_markup=teclado_principal)
+        return TIPO
+
+# --- Funções simuladas ---
 async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Função categoria_callback em construção.")
     return ConversationHandler.END
