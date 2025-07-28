@@ -2,21 +2,29 @@ import sqlite3
 import os
 from datetime import datetime
 from telegram import (
-    Update, ReplyKeyboardMarkup, ReplyKeyboardRemove,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
 )
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
-    ConversationHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
+    CallbackQueryHandler,
+    ConversationHandler,
 )
 
+# Estados do ConversationHandler
+TIPO, CATEGORIA, VALOR, DESCRICAO = range(4)
+
+# Token do ambiente
 TOKEN = os.environ.get("BOT_TOKEN")
 
+# Banco SQLite
 conn = sqlite3.connect('financeiro.db', check_same_thread=False)
 cursor = conn.cursor()
 
@@ -34,12 +42,14 @@ conn.commit()
 
 def adicionar_transacao(tipo, categoria, valor, descricao):
     data = datetime.now().strftime('%Y-%m-%d')
-    cursor.execute('INSERT INTO transacoes (tipo, categoria, valor, data, descricao) VALUES (?, ?, ?, ?, ?)',
-                   (tipo, categoria, valor, data, descricao))
+    cursor.execute(
+        'INSERT INTO transacoes (tipo, categoria, valor, data, descricao) VALUES (?, ?, ?, ?, ?)',
+        (tipo, categoria, valor, data, descricao)
+    )
     conn.commit()
 
-def deletar_transacao(id):
-    cursor.execute('DELETE FROM transacoes WHERE id = ?', (id,))
+def deletar_transacao(id_):
+    cursor.execute('DELETE FROM transacoes WHERE id = ?', (id_,))
     conn.commit()
 
 def gerar_relatorio(mes):
@@ -53,180 +63,147 @@ def calcular_saldo():
     despesas = cursor.fetchone()[0] or 0
     return receitas - despesas
 
-TIPO, CATEGORIA, VALOR, DESCRICAO = range(4)
-
+# Categorias receita para botão inline
 CATEGORIAS_RECEITA = [
     "Salário mensal",
     "Vale Alimentação",
     "Vendas Canais",
     "Adesão APP",
-    "Outra"
 ]
 
-TECLADO_PRINCIPAL = ReplyKeyboardMarkup(
-    [["➕ Receita", "➖ Despesa"], ["📊 Relatório", "💰 Saldo"]],
-    resize_keyboard=True
+# Teclado principal persistente
+teclado_principal = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("Adicionar Receita"), KeyboardButton("Adicionar Despesa")],
+        [KeyboardButton("Relatório"), KeyboardButton("Saldo")],
+        [KeyboardButton("Cancelar")],
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False
 )
+
+# --- Handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Bem-vindo ao Bot de Gestão Financeira!\n\n"
-        "Use os botões abaixo para começar:",
-        reply_markup=TECLADO_PRINCIPAL
+        "🤖 Bem-vindo ao Bot de Gestão Financeira!\n"
+        "Use o teclado abaixo para navegar.",
+        reply_markup=teclado_principal,
     )
     return TIPO
 
 async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text
-    if texto == "➕ Receita":
-        context.user_data['tipo'] = 'receita'
-
-        # Monta os botões inline para categorias
-        keyboard = [
+    texto = update.message.text.lower()
+    if texto == "adicionar receita":
+        # Mostrar categorias de receita em inline buttons
+        buttons = [
             [InlineKeyboardButton(cat, callback_data=cat)] for cat in CATEGORIAS_RECEITA
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
+        markup = InlineKeyboardMarkup(buttons)
         await update.message.reply_text(
-            "📂 Escolha uma categoria para a receita:",
-            reply_markup=reply_markup
+            "Selecione a categoria da receita:",
+            reply_markup=markup
         )
         return CATEGORIA
 
-    elif texto == "➖ Despesa":
-        context.user_data['tipo'] = 'despesa'
+    elif texto == "adicionar despesa":
         await update.message.reply_text(
-            "📂 Digite a *categoria* da despesa:",
-            parse_mode='Markdown',
-            reply_markup=ReplyKeyboardRemove()
+            "Envie a categoria da despesa (texto):"
         )
         return CATEGORIA
 
-    elif texto == "📊 Relatório":
+    elif texto == "relatório":
         await update.message.reply_text(
-            "Use o comando:\n/relatorio MM\n(exemplo: /relatorio 07 para julho)",
-            reply_markup=TECLADO_PRINCIPAL
+            "Envie o mês do relatório no formato MM (exemplo: 07 para julho):"
         )
-        return TIPO
+        return VALOR  # Usamos VALOR só para receber entrada do mês no fluxo relatorio
 
-    elif texto == "💰 Saldo":
+    elif texto == "saldo":
         saldo_atual = calcular_saldo()
-        await update.message.reply_text(f"💰 Saldo atual: R$ {saldo_atual:.2f}", reply_markup=TECLADO_PRINCIPAL)
+        await update.message.reply_text(f"💰 Saldo atual: R$ {saldo_atual:.2f}")
         return TIPO
+
+    elif texto == "cancelar":
+        await update.message.reply_text("Operação cancelada.", reply_markup=teclado_principal)
+        return ConversationHandler.END
 
     else:
-        await update.message.reply_text("❌ Por favor, escolha uma opção válida usando os botões.")
+        await update.message.reply_text(
+            "Comando inválido. Use o teclado para selecionar uma opção."
+        )
         return TIPO
 
-# Tratador dos botões inline para categoria receita
 async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     categoria = query.data
-    if categoria == "Outra":
-        await query.edit_message_text(
-            "Digite a categoria da receita manualmente:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return CATEGORIA  # continua esperando input texto manual
-
+    context.user_data['tipo'] = 'receita'
     context.user_data['categoria'] = categoria
-    await query.edit_message_text(f"Categoria selecionada: *{categoria}*\n\n💵 Agora digite o *valor* (exemplo: 123.45):",
-                                  parse_mode='Markdown')
+
+    await query.message.reply_text("Digite o valor da receita (exemplo: 1500.00):")
     return VALOR
 
 async def receber_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Só cai aqui se for despesa ou categoria receita digitada manualmente (caso "Outra")
-    texto = update.message.text.strip()
-    tipo = context.user_data.get('tipo')
+    categoria = update.message.text
+    context.user_data['categoria'] = categoria
+    context.user_data['tipo'] = 'despesa'
 
-    if tipo == 'receita':
-        if texto == '':
-            await update.message.reply_text("❌ Categoria inválida. Digite novamente:")
-            return CATEGORIA
-        context.user_data['categoria'] = texto
-        await update.message.reply_text("💵 Agora digite o *valor* (exemplo: 123.45):", parse_mode='Markdown')
-        return VALOR
-
-    else:
-        if texto == '':
-            await update.message.reply_text("❌ Categoria inválida. Digite novamente:")
-            return CATEGORIA
-        context.user_data['categoria'] = texto
-        await update.message.reply_text("💵 Agora digite o *valor* (exemplo: 123.45):", parse_mode='Markdown')
-        return VALOR
+    await update.message.reply_text("Digite o valor da despesa (exemplo: 50.00):")
+    return VALOR
 
 async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.strip()
     try:
-        valor = float(texto.replace(',', '.'))
-        if valor <= 0:
-            raise ValueError()
+        valor = float(update.message.text.replace(',', '.'))
         context.user_data['valor'] = valor
-        await update.message.reply_text("📝 Agora digite uma descrição (ou 'nenhuma') para a transação:")
-        return DESCRICAO
-    except:
-        await update.message.reply_text("❌ Valor inválido. Digite um número positivo, ex: 123.45")
+    except ValueError:
+        await update.message.reply_text("Valor inválido. Digite um número, por favor:")
         return VALOR
 
+    await update.message.reply_text("Digite uma descrição (ou 'nenhuma'):")
+    return DESCRICAO
+
 async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    descricao = update.message.text.strip()
+    descricao = update.message.text
     if descricao.lower() == 'nenhuma':
         descricao = ''
-    context.user_data['descricao'] = descricao
 
-    adicionar_transacao(
-        context.user_data['tipo'],
-        context.user_data['categoria'],
-        context.user_data['valor'],
-        context.user_data['descricao']
-    )
+    tipo = context.user_data.get('tipo')
+    categoria = context.user_data.get('categoria')
+    valor = context.user_data.get('valor')
+
+    adicionar_transacao(tipo, categoria, valor, descricao)
 
     await update.message.reply_text(
-        f"✅ {context.user_data['tipo'].capitalize()} adicionada com sucesso!\n"
-        f"Categoria: {context.user_data['categoria']}\n"
-        f"Valor: R$ {context.user_data['valor']:.2f}\n"
-        f"Descrição: {descricao if descricao else '(nenhuma)'}",
-        reply_markup=TECLADO_PRINCIPAL
+        f"✅ {tipo.capitalize()} adicionada:\n"
+        f"Categoria: {categoria}\n"
+        f"Valor: R$ {valor:.2f}\n"
+        f"Descrição: {descricao if descricao else '(sem descrição)'}",
+        reply_markup=teclado_principal
     )
+    return TIPO
 
+async def receber_relatorio_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mes = update.message.text
+    if len(mes) != 2 or not mes.isdigit() or not (1 <= int(mes) <= 12):
+        await update.message.reply_text("Mês inválido. Envie no formato MM (ex: 07):")
+        return VALOR
+
+    dados = gerar_relatorio(mes.zfill(2))
+    if not dados:
+        await update.message.reply_text("📭 Sem transações nesse mês.", reply_markup=teclado_principal)
+        return TIPO
+
+    msg = "📊 Relatório:\n"
+    for tipo, cat, val, data in dados:
+        msg += f"{data} - {tipo.upper()} - {cat} - R$ {val:.2f}\n"
+
+    await update.message.reply_text(msg, reply_markup=teclado_principal)
     return TIPO
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Operação cancelada.",
-        reply_markup=TECLADO_PRINCIPAL
-    )
+    await update.message.reply_text("Operação cancelada.", reply_markup=teclado_principal)
     return ConversationHandler.END
-
-async def comando_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        mes = context.args[0]
-        if len(mes) != 2 or not mes.isdigit() or not (1 <= int(mes) <= 12):
-            raise ValueError()
-        dados = gerar_relatorio(mes)
-        if not dados:
-            await update.message.reply_text("📭 Sem transações nesse mês.")
-            return
-        msg = "📊 Relatório:\n"
-        for tipo, cat, val, data in dados:
-            msg += f"{data} - {tipo.upper()} - {cat} - R$ {val:.2f}\n"
-        await update.message.reply_text(msg)
-    except:
-        await update.message.reply_text("❌ Erro. Use: /relatorio MM (ex: 07)")
-
-async def comando_deletar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        id = int(context.args[0])
-        deletar_transacao(id)
-        await update.message.reply_text("🗑️ Transação deletada.")
-    except:
-        await update.message.reply_text("❌ Erro. Use: /deletar ID")
-
-async def comando_saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    saldo_atual = calcular_saldo()
-    await update.message.reply_text(f"💰 Saldo atual: R$ {saldo_atual:.2f}")
 
 def main():
     if not TOKEN:
@@ -240,10 +217,24 @@ def main():
         states={
             TIPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
             CATEGORIA: [
-                CallbackQueryHandler(categoria_callback),  # captura cliques em botões inline categoria receita
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_categoria)  # input texto manual (despesa ou categoria receita "Outra")
+                CallbackQueryHandler(categoria_callback),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_categoria)
             ],
-            VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
+            VALOR: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor),
+                # Usado também para relatório:
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_relatorio_mes)
+            ],
             DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)],
         },
-        fallbacks=[CommandHandler('cancelar',
+        fallbacks=[CommandHandler('cancelar', cancelar)],
+        allow_reentry=True,
+    )
+
+    app.add_handler(conv_handler)
+
+    print("✅ Bot rodando...")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
