@@ -19,10 +19,14 @@ from telegram.ext import (
 )
 from apscheduler.schedulers.background import BackgroundScheduler
 
+# --- Constantes ---
 TIPO, CATEGORIA, VALOR, DESCRICAO, RELATORIO = range(5)
 AGENDAR_CATEGORIA, AGENDAR_VALOR, AGENDAR_VENCIMENTO, AGENDAR_DESCRICAO = range(5, 9)
 
 TOKEN = os.environ.get("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("Erro: variável de ambiente BOT_TOKEN não está definida!")
+
 DB_PATH = 'financeiro.db'
 
 CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", "Adesão APP"]
@@ -53,10 +57,19 @@ def adicionar_transacao(tipo, categoria, valor, descricao):
         conn.execute('''INSERT INTO transacoes (tipo, categoria, valor, data, descricao)
                         VALUES (?, ?, ?, ?, ?)''', (tipo, categoria, valor, data, descricao))
 
+def calcular_saldo():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'receita'")
+        receitas = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'despesa'")
+        despesas = cursor.fetchone()[0] or 0
+    return receitas - despesas
+
+# --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     criar_tabelas()
-    await update.message.reply_text(
-        "Bem-vindo ao Bot Financeiro!", reply_markup=teclado_principal)
+    await update.message.reply_text("Bem-vindo ao Bot Financeiro!", reply_markup=teclado_principal)
     return TIPO
 
 async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,7 +94,7 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if texto == "saldo":
         saldo = calcular_saldo()
-        await update.message.reply_text(f"Saldo atual: R$ {saldo:.2f}")
+        await update.message.reply_text(f"Saldo atual: R$ {saldo:.2f}", reply_markup=teclado_principal)
         return TIPO
 
     if texto == "adicionar despesa agendada":
@@ -92,7 +105,7 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if texto == "ver despesas agendadas":
         return await listar_despesas_agendadas(update, context)
 
-    await update.message.reply_text("Escolha uma opção válida.")
+    await update.message.reply_text("Escolha uma opção válida.", reply_markup=teclado_principal)
     return TIPO
 
 async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -119,15 +132,14 @@ async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     descricao = update.message.text if update.message.text.lower() != 'nenhuma' else ''
-    tipo = context.user_data['tipo']
-    adicionar_transacao(tipo, context.user_data['categoria'], context.user_data['valor'], descricao)
+    adicionar_transacao(context.user_data['tipo'], context.user_data['categoria'], context.user_data['valor'], descricao)
     await update.message.reply_text("Transação registrada com sucesso!", reply_markup=teclado_principal)
     return TIPO
 
 async def receber_relatorio_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mes = update.message.text.zfill(2)
     if not mes.isdigit() or not (1 <= int(mes) <= 12):
-        await update.message.reply_text("Mês inválido. Digite no formato MM (ex: 07 para julho):")
+        await update.message.reply_text("Mês inválido. Digite no formato MM (ex: 07):")
         return RELATORIO
 
     with sqlite3.connect(DB_PATH) as conn:
@@ -152,16 +164,8 @@ async def receber_relatorio_mes(update: Update, context: ContextTypes.DEFAULT_TY
     msg += f"\nSaldo: R$ {total['receita'] - total['despesa']:.2f}"
     await update.message.reply_text(msg, reply_markup=teclado_principal)
     return TIPO
-  def calcular_saldo():
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'receita'")
-        receitas = cursor.fetchone()[0] or 0
-        cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'despesa'")
-        despesas = cursor.fetchone()[0] or 0
-    return receitas - despesas
 
-# --- Despesa Agendada ---
+# --- Despesas Agendadas ---
 async def agendar_categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -242,10 +246,10 @@ async def pagar_despesa_callback(update: Update, context: ContextTypes.DEFAULT_T
         cursor.execute("UPDATE despesas_agendadas SET status = 'pago' WHERE id = ?", (despesa_id,))
         conn.commit()
 
-    await query.message.reply_text("✅ Despesa marcada como paga e registrada!")
+    await query.message.reply_text("✅ Despesa marcada como paga e registrada!", reply_markup=teclado_principal)
     return TIPO
 
-# --- Scheduler de alertas ---
+# --- Scheduler ---
 def verificar_vencimentos():
     hoje = datetime.today().date().isoformat()
     with sqlite3.connect(DB_PATH) as conn:
@@ -256,6 +260,7 @@ def verificar_vencimentos():
         id, cat, val, venc = row
         print(f"[ALERTA] Despesa '{cat}' de R$ {val:.2f} vence hoje ({venc}).")
 
+# --- MAIN ---
 def main():
     criar_tabelas()
     app = ApplicationBuilder().token(TOKEN).build()
@@ -264,9 +269,7 @@ def main():
         entry_points=[CommandHandler("start", start)],
         states={
             TIPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
-            CATEGORIA: [
-                CallbackQueryHandler(categoria_callback),
-            ],
+            CATEGORIA: [CallbackQueryHandler(categoria_callback)],
             VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
             DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)],
             RELATORIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_relatorio_mes)],
@@ -281,7 +284,7 @@ def main():
 
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(pagar_despesa_callback, pattern="^pagar_"))
-    
+
     scheduler = BackgroundScheduler()
     scheduler.add_job(verificar_vencimentos, 'interval', hours=24)
     scheduler.start()
