@@ -27,13 +27,13 @@ TOKEN = os.environ.get("BOT_TOKEN")
 DB_PATH = 'financeiro.db'
 
 CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", "Adesão APP", "Vendas Créditos", "Saldo Inicial"]
-CATEGORIAS_DESPESA = ["Alimentação", "Transporte", "Lazer", "Saúde", "Moradia", "Educação", "Cartões", "Outros"]
+CATEGORIAS_DESPESA = ["Alimentação", "Transporte", "Lazer", "Saúde", "Moradia", "Educação", "Cartões" "Outros"]
 
 teclado_principal = ReplyKeyboardMarkup([
     [KeyboardButton("💰 Adicionar Receita"), KeyboardButton("💲 Adicionar Despesa")],
     [KeyboardButton("🗑️ Remover Receita/Despesa")],
     [KeyboardButton("📊 Relatório"), KeyboardButton("💵 Saldo")],
-    [KeyboardButton("📅 Adicionar Despesa Agendada"), KeyboardButton("📋 Ver Despesas Agendadas")],
+    [KeyboardButton("🗓️ Adicionar Despesa Agendada"), KeyboardButton("📋 Ver Despesas Agendadas")],
     [KeyboardButton("❌ Cancelar")],
 ], resize_keyboard=True)
 
@@ -78,7 +78,6 @@ def adicionar_transacao(tipo, categoria, valor, descricao):
         conn.execute('''INSERT INTO transacoes (tipo, categoria, valor, data, descricao)
                         VALUES (?, ?, ?, ?, ?)''', (tipo, categoria, valor, data, descricao))
 
-
 def calcular_saldo():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -87,7 +86,6 @@ def calcular_saldo():
         cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'despesa'")
         despesas = cursor.fetchone()[0] or 0
     return receitas - despesas
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     criar_tabelas()
@@ -157,6 +155,29 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         saldo = calcular_saldo()
         await update.message.reply_text(f"Saldo atual: R$ {saldo:.2f}", reply_markup=teclado_principal)
         return TIPO
+
+    if '/' in texto and len(texto) == 7:
+        try:
+            mes, ano = texto.split('/')
+            datetime.strptime(f"01/{mes}/{ano}", "%d/%m/%Y")
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT tipo, categoria, valor, data FROM transacoes
+                    WHERE strftime('%m/%Y', substr(data, 7, 4) || '-' || substr(data, 4, 2) || '-' || substr(data, 1, 2)) = ?
+                """, (texto,))
+                dados = cursor.fetchall()
+
+            if not dados:
+                await update.message.reply_text("Nenhuma transação encontrada para esse período.", reply_markup=teclado_principal)
+                return TIPO
+
+            relatorio = "\n".join([f"{d[0].capitalize()} - {d[1]} - R$ {d[2]:.2f} ({d[3]})" for d in dados])
+            await update.message.reply_text(f"Relatório de {texto}:\n{relatorio}", reply_markup=teclado_principal)
+            return TIPO
+        except Exception:
+            await update.message.reply_text("Formato inválido. Use MM/AAAA.", reply_markup=teclado_voltar_cancelar())
+            return RELATORIO
 
     await update.message.reply_text("Escolha uma opção válida.", reply_markup=teclado_principal)
     return TIPO
