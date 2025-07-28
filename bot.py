@@ -269,6 +269,7 @@ async def agendar_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
 async def listar_despesas_agendadas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -278,6 +279,21 @@ async def listar_despesas_agendadas(update: Update, context: ContextTypes.DEFAUL
     if not despesas:
         await update.message.reply_text("Não há despesas agendadas pendentes.", reply_markup=teclado_principal)
         return TIPO
+
+    for desp in despesas:
+        msg = f"""ID: {desp[0]}
+Categoria: {desp[1]}
+Valor: R$ {desp[2]:.2f}
+Vencimento: {desp[3]}
+Descrição: {desp[4]}
+Status: {desp[5]}"""
+        botao = InlineKeyboardMarkup.from_button(
+            InlineKeyboardButton("✅ Marcar como paga", callback_data=f"pagar_{desp[0]}")
+        )
+        await update.message.reply_text(msg, reply_markup=botao)
+
+    return TIPO
+
 
     for desp in despesas:
         msg = (
