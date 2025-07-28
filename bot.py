@@ -126,26 +126,42 @@ async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receber_relatorio_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mes = update.message.text.zfill(2)
+    if not mes.isdigit() or not (1 <= int(mes) <= 12):
+        await update.message.reply_text("Mês inválido. Digite no formato MM (ex: 07 para julho):")
+        return RELATORIO
+
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT tipo, categoria, valor FROM transacoes WHERE strftime('%m', data) = ?", (mes,))
+        cursor.execute("""
+            SELECT tipo, categoria, valor, data
+            FROM transacoes
+            WHERE strftime('%m', data) = ?
+            ORDER BY data ASC
+        """, (mes,))
         dados = cursor.fetchall()
 
     if not dados:
         await update.message.reply_text("Sem dados para este mês.", reply_markup=teclado_principal)
         return TIPO
 
-    msg = f"Relatório {mes}:
-"
+    msg = f"\U0001F4CA Relatório do mês {mes}:\n"
     total = {"receita": 0, "despesa": 0}
-    for tipo, cat, val in dados:
-        msg += f"{tipo.upper()}: {cat} - R$ {val:.2f}\n"
+    for tipo, cat, val, data in dados:
+        msg += f"{data} - {tipo.upper()}: {cat} - R$ {val:.2f}\n"
         total[tipo] += val
     msg += f"\nSaldo: R$ {total['receita'] - total['despesa']:.2f}"
     await update.message.reply_text(msg, reply_markup=teclado_principal)
     return TIPO
+  def calcular_saldo():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'receita'")
+        receitas = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'despesa'")
+        despesas = cursor.fetchone()[0] or 0
+    return receitas - despesas
 
-# --- Agendamento de Despesa ---
+# --- Despesa Agendada ---
 async def agendar_categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -167,12 +183,14 @@ async def agendar_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def agendar_vencimento(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        vencimento = datetime.strptime(update.message.text, '%Y-%m-%d')
-        context.user_data['vencimento'] = vencimento.strftime('%Y-%m-%d')
-        await update.message.reply_text("Digite uma descrição (ou 'nenhuma'):")
+        venc = datetime.strptime(update.message.text, "%Y-%m-%d").date()
+        if venc < datetime.today().date():
+            raise ValueError
+        context.user_data['vencimento'] = venc.isoformat()
+        await update.message.reply_text("Descrição da despesa (ou 'nenhuma'):")
         return AGENDAR_DESCRICAO
     except ValueError:
-        await update.message.reply_text("Data inválida. Use o formato YYYY-MM-DD:")
+        await update.message.reply_text("Data inválida. Use o formato YYYY-MM-DD e uma data futura.")
         return AGENDAR_VENCIMENTO
 
 async def agendar_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -180,96 +198,95 @@ async def agendar_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute('''INSERT INTO despesas_agendadas (categoria, valor, vencimento, descricao)
                         VALUES (?, ?, ?, ?)''', (
-            context.user_data['categoria'], context.user_data['valor'],
-            context.user_data['vencimento'], descricao))
+            context.user_data['categoria'],
+            context.user_data['valor'],
+            context.user_data['vencimento'],
+            descricao
+        ))
     await update.message.reply_text("Despesa agendada com sucesso!", reply_markup=teclado_principal)
     return TIPO
 
 async def listar_despesas_agendadas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, categoria, valor, vencimento, status FROM despesas_agendadas WHERE status='pendente'")
+        cursor.execute("SELECT id, categoria, valor, vencimento, descricao, status FROM despesas_agendadas ORDER BY vencimento ASC")
         rows = cursor.fetchall()
 
     if not rows:
         await update.message.reply_text("Nenhuma despesa agendada.", reply_markup=teclado_principal)
         return TIPO
 
-    buttons = [[InlineKeyboardButton(f"{cat} - {venc} - R$ {val:.2f}", callback_data=f"pagar_{id}")]
-               for id, cat, val, venc, status in rows]
-    markup = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text("Despesas Agendadas:", reply_markup=markup)
+    for row in rows:
+        id, cat, val, venc, desc, status = row
+        msg = f"🗓️ Vencimento: {venc}\n📌 Categoria: {cat}\n💰 Valor: R$ {val:.2f}\n📄 Desc: {desc or '(sem descrição)'}\n📍Status: {status}"
+        if status == "pendente":
+            buttons = [[InlineKeyboardButton("Marcar como Pago", callback_data=f"pagar_{id}")]]
+            await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(buttons))
+        else:
+            await update.message.reply_text(msg)
     return TIPO
 
-async def marcar_como_pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def pagar_despesa_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    id = int(query.data.split('_')[1])
-
+    despesa_id = int(query.data.split('_')[1])
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT categoria, valor, descricao FROM despesas_agendadas WHERE id=?", (id,))
+        cursor.execute("SELECT categoria, valor, descricao FROM despesas_agendadas WHERE id = ?", (despesa_id,))
         row = cursor.fetchone()
-        if row:
-            adicionar_transacao("despesa", row[0], row[1], row[2])
-            cursor.execute("UPDATE despesas_agendadas SET status='pago' WHERE id=?", (id,))
-            conn.commit()
+        if not row:
+            await query.message.reply_text("Despesa não encontrada.")
+            return TIPO
+        cat, val, desc = row
+        adicionar_transacao('despesa', cat, val, desc)
+        cursor.execute("UPDATE despesas_agendadas SET status = 'pago' WHERE id = ?", (despesa_id,))
+        conn.commit()
 
-    await query.message.reply_text("Despesa marcada como paga!", reply_markup=teclado_principal)
+    await query.message.reply_text("✅ Despesa marcada como paga e registrada!")
     return TIPO
 
-# --- Alerta Diário ---
+# --- Scheduler de alertas ---
 def verificar_vencimentos():
+    hoje = datetime.today().date().isoformat()
     with sqlite3.connect(DB_PATH) as conn:
-        hoje = datetime.now().strftime('%Y-%m-%d')
         cursor = conn.cursor()
-        cursor.execute("SELECT id, descricao FROM despesas_agendadas WHERE vencimento=? AND status='pendente'", (hoje,))
+        cursor.execute("SELECT id, categoria, valor, vencimento FROM despesas_agendadas WHERE status = 'pendente' AND vencimento <= ?", (hoje,))
         rows = cursor.fetchall()
-        for row in rows:
-            print(f"⚠️ Alerta: Despesa pendente hoje: {row[1]}")
-
-scheduler = BackgroundScheduler()
-scheduler.add_job(verificar_vencimentos, 'interval', hours=24)
-scheduler.start()
-
-def calcular_saldo():
-    with sqlite3.connect(DB_PATH) as conn:
-        c = conn.cursor()
-        c.execute("SELECT SUM(valor) FROM transacoes WHERE tipo='receita'")
-        receitas = c.fetchone()[0] or 0
-        c.execute("SELECT SUM(valor) FROM transacoes WHERE tipo='despesa'")
-        despesas = c.fetchone()[0] or 0
-        return receitas - despesas
+    for row in rows:
+        id, cat, val, venc = row
+        print(f"[ALERTA] Despesa '{cat}' de R$ {val:.2f} vence hoje ({venc}).")
 
 def main():
-    if not TOKEN:
-        print("BOT_TOKEN não definido.")
-        return
-
+    criar_tabelas()
     app = ApplicationBuilder().token(TOKEN).build()
 
-    conv = ConversationHandler(
-        entry_points=[CommandHandler('start', start), MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
         states={
             TIPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
-            CATEGORIA: [CallbackQueryHandler(categoria_callback)],
+            CATEGORIA: [
+                CallbackQueryHandler(categoria_callback),
+            ],
             VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
             DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)],
             RELATORIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_relatorio_mes)],
-
             AGENDAR_CATEGORIA: [CallbackQueryHandler(agendar_categoria_callback)],
             AGENDAR_VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_valor)],
             AGENDAR_VENCIMENTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_vencimento)],
-            AGENDAR_DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_descricao)]
+            AGENDAR_DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_descricao)],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancelar", start)],
         allow_reentry=True
     )
 
-    app.add_handler(conv)
-    app.add_handler(CallbackQueryHandler(marcar_como_pago, pattern=r'^pagar_\\d+$'))
+    app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(pagar_despesa_callback, pattern="^pagar_"))
+    
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(verificar_vencimentos, 'interval', hours=24)
+    scheduler.start()
 
-    print("Bot rodando...")
+    print("✅ Bot iniciado.")
     app.run_polling()
 
 if __name__ == '__main__':
