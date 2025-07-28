@@ -20,29 +20,27 @@ from telegram.ext import (
 
 TIPO, CATEGORIA, VALOR, DESCRICAO, RELATORIO = range(5)
 AGENDAR_CATEGORIA, AGENDAR_VALOR, AGENDAR_VENCIMENTO, AGENDAR_DESCRICAO = range(5, 9)
+EXCLUIR = 9  # Novo estado
 
 TOKEN = os.environ.get("BOT_TOKEN")
 DB_PATH = 'financeiro.db'
 
-# Categorias atualizadas (incluindo Vendas Créditos)
 CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", "Adesão APP", "Vendas Créditos"]
 CATEGORIAS_DESPESA = ["Alimentação", "Transporte", "Lazer", "Saúde", "Moradia", "Educação", "Outros"]
 
-# Teclado principal com emojis
 teclado_principal = ReplyKeyboardMarkup([
     [KeyboardButton("💰 Adicionar Receita"), KeyboardButton("🛒 Adicionar Despesa")],
     [KeyboardButton("📊 Relatório"), KeyboardButton("💵 Saldo")],
     [KeyboardButton("📅 Adicionar Despesa Agendada"), KeyboardButton("📋 Ver Despesas Agendadas")],
+    [KeyboardButton("🗑️ Excluir Transação")],
     [KeyboardButton("❌ Cancelar")],
 ], resize_keyboard=True)
 
-# Teclado com botão Voltar e Cancelar para as etapas intermediárias, com emojis
 def teclado_voltar_cancelar():
     return ReplyKeyboardMarkup([
         [KeyboardButton("⬅️ Voltar"), KeyboardButton("❌ Cancelar")]
     ], resize_keyboard=True)
 
-# --- Banco de Dados ---
 def criar_tabelas():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -69,11 +67,10 @@ def calcular_saldo():
         despesas = cursor.fetchone()[0] or 0
     return receitas - despesas
 
-# --- Handlers ---
+# --- Funções principais ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     criar_tabelas()
-    await update.message.reply_text(
-        "Bem-vindo ao Bot Financeiro!", reply_markup=teclado_principal)
+    await update.message.reply_text("Bem-vindo ao Bot Financeiro!", reply_markup=teclado_principal)
     return TIPO
 
 async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,7 +81,6 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return TIPO
 
     if texto in ["⬅️ voltar", "voltar"]:
-        # No menu principal, voltar não faz sentido
         await update.message.reply_text("Você já está no menu principal.", reply_markup=teclado_principal)
         return TIPO
 
@@ -114,6 +110,9 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if texto in ["📋 ver despesas agendadas", "ver despesas agendadas"]:
         return await listar_despesas_agendadas(update, context)
+
+    if texto in ["🗑️ excluir transação", "excluir transação"]:
+        return await listar_transacoes_para_excluir(update, context)
 
     await update.message.reply_text("Escolha uma opção válida.", reply_markup=teclado_principal)
     return TIPO
@@ -200,7 +199,7 @@ async def receber_relatorio_mes(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text(msg, reply_markup=teclado_principal)
     return TIPO
 
-# --- Despesa Agendada ---
+# --- Despesas Agendadas ---
 async def agendar_categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -274,16 +273,48 @@ async def listar_despesas_agendadas(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Não há despesas agendadas pendentes.", reply_markup=teclado_principal)
         return TIPO
 
-    mensagens = []
     for desp in despesas:
         msg = (f"ID: {desp[0]}\nCategoria: {desp[1]}\nValor: R$ {desp[2]:.2f}\n"
                f"Vencimento: {desp[3]}\nDescrição: {desp[4]}\nStatus: {desp[5]}")
-        mensagens.append(msg)
-
-    for msg in mensagens:
         await update.message.reply_text(msg)
+
     await update.message.reply_text("Use o botão abaixo para pagar uma despesa:", reply_markup=teclado_principal)
     return TIPO
+
+# --- NOVAS FUNÇÕES: Excluir Transação ---
+async def listar_transacoes_para_excluir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, tipo, categoria, valor, data
+            FROM transacoes
+            ORDER BY data DESC, id DESC
+            LIMIT 10
+        """)
+        transacoes = cursor.fetchall()
+
+    if not transacoes:
+        await update.message.reply_text("Nenhuma transação recente encontrada.", reply_markup=teclado_principal)
+        return TIPO
+
+    for t in transacoes:
+        texto = f"ID: {t[0]}\n{t[1].upper()} - {t[2]}: R$ {t[3]:.2f} em {t[4]}"
+        botao = InlineKeyboardMarkup.from_button(
+            InlineKeyboardButton("🗑️ Excluir", callback_data=f"excluir_{t[0]}")
+        )
+        await update.message.reply_text(texto, reply_markup=botao)
+
+    await update.message.reply_text("Selecione qual transação deseja excluir.", reply_markup=teclado_principal)
+    return TIPO
+
+async def excluir_transacao_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    transacao_id = int(query.data.split('_')[1])
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM transacoes WHERE id=?", (transacao_id,))
+        conn.commit()
+    await query.message.reply_text(f"Transação {transacao_id} excluída com sucesso. 🗑️", reply_markup=teclado_principal)
 
 async def pagar_despesa_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -294,44 +325,29 @@ async def pagar_despesa_callback(update: Update, context: ContextTypes.DEFAULT_T
         conn.commit()
     await query.message.reply_text(f"Despesa {despesa_id} marcada como paga.", reply_markup=teclado_principal)
 
+# --- Main ---
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            TIPO: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)
-            ],
-            CATEGORIA: [
-                CallbackQueryHandler(categoria_callback)
-            ],
-            VALOR: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)
-            ],
-            DESCRICAO: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)
-            ],
-            RELATORIO: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_relatorio_mes)
-            ],
-            AGENDAR_CATEGORIA: [
-                CallbackQueryHandler(agendar_categoria_callback)
-            ],
-            AGENDAR_VALOR: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_valor)
-            ],
-            AGENDAR_VENCIMENTO: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_vencimento)
-            ],
-            AGENDAR_DESCRICAO: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_descricao)
-            ],
+            TIPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
+            CATEGORIA: [CallbackQueryHandler(categoria_callback)],
+            VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
+            DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)],
+            RELATORIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_relatorio_mes)],
+            AGENDAR_CATEGORIA: [CallbackQueryHandler(agendar_categoria_callback)],
+            AGENDAR_VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_valor)],
+            AGENDAR_VENCIMENTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_vencimento)],
+            AGENDAR_DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_descricao)],
+            EXCLUIR: [CallbackQueryHandler(excluir_transacao_callback, pattern=r"^excluir_\d+$")]
         },
         fallbacks=[MessageHandler(filters.Regex("^(❌ Cancelar|⬅️ Voltar)$"), escolher_tipo)]
     )
 
     application.add_handler(conv_handler)
+    application.add_handler(CallbackQueryHandler(excluir_transacao_callback, pattern=r"^excluir_\d+$"))
     application.add_handler(CallbackQueryHandler(pagar_despesa_callback, pattern=r"^pagar_\d+$"))
 
     application.run_polling()
