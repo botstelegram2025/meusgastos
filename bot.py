@@ -33,9 +33,9 @@ CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", 
 CATEGORIAS_DESPESA = ["Alimentação", "Transporte", "Lazer", "Saúde", "Moradia", "Educação", "Outros"]
 
 teclado_principal = ReplyKeyboardMarkup([
-    [KeyboardButton("💰 Adicionar Receita"), KeyboardButton("🛍️ Adicionar Despesa")],
+    [KeyboardButton("💰 Adicionar Receita"), KeyboardButton("🛒 Adicionar Despesa")],
     [KeyboardButton("📊 Relatório"), KeyboardButton("💵 Saldo")],
-    [KeyboardButton("🗕️ Adicionar Despesa Agendada"), KeyboardButton("📋 Ver Despesas Agendadas")],
+    [KeyboardButton("📅 Adicionar Despesa Agendada"), KeyboardButton("📋 Ver Despesas Agendadas")],
     [KeyboardButton("🗑️ Excluir Transação")],
     [KeyboardButton("❌ Cancelar")],
 ], resize_keyboard=True)
@@ -45,7 +45,6 @@ def teclado_voltar_cancelar():
         [KeyboardButton("⬅️ Voltar"), KeyboardButton("❌ Cancelar")]
     ], resize_keyboard=True)
 
-# --- Banco de dados ---
 def criar_tabelas():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -59,7 +58,21 @@ def criar_tabelas():
             chat_id INTEGER PRIMARY KEY)''')
         conn.commit()
 
-# --- Verificação de senha ---
+def adicionar_transacao(tipo, categoria, valor, descricao):
+    data = datetime.now().strftime('%Y-%m-%d')
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute('''INSERT INTO transacoes (tipo, categoria, valor, data, descricao)
+                        VALUES (?, ?, ?, ?, ?)''', (tipo, categoria, valor, data, descricao))
+
+def calcular_saldo():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'receita'")
+        receitas = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT SUM(valor) FROM transacoes WHERE tipo = 'despesa'")
+        despesas = cursor.fetchone()[0] or 0
+    return receitas - despesas
+
 async def verificar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     senha_digitada = update.message.text.strip()
 
@@ -75,7 +88,6 @@ async def verificar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Acesso autorizado! Bem-vindo ao Bot Financeiro.", reply_markup=teclado_principal)
     return TIPO
 
-# --- Início ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     criar_tabelas()
     chat_id = update.message.chat_id
@@ -92,11 +104,128 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Bem-vindo de volta ao Bot Financeiro!", reply_markup=teclado_principal)
     return TIPO
 
-# Aqui viriam as demais funções do bot (escolher_tipo, categoria_callback, etc.)
-# Elas permanecem exatamente como no seu código anterior e não precisam ser modificadas.
-# Você só precisa garantir que SENHA esteja incluído no ConversationHandler.
+# --- Demais funções do bot ---
 
-# --- Main ---
+async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text
+    if texto == "💰 Adicionar Receita":
+        context.user_data['tipo'] = 'receita'
+        categorias = CATEGORIAS_RECEITA
+    elif texto == "🛒 Adicionar Despesa":
+        context.user_data['tipo'] = 'despesa'
+        categorias = CATEGORIAS_DESPESA
+    else:
+        return TIPO
+
+    botoes = [[InlineKeyboardButton(cat, callback_data=cat)] for cat in categorias]
+    await update.message.reply_text("Escolha a categoria:", reply_markup=InlineKeyboardMarkup(botoes))
+    return CATEGORIA
+
+async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['categoria'] = query.data
+    await query.edit_message_text("Digite o valor:")
+    return VALOR
+
+async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        valor = float(update.message.text.replace(',', '.'))
+        context.user_data['valor'] = valor
+        await update.message.reply_text("Digite uma descrição:")
+        return DESCRICAO
+    except ValueError:
+        await update.message.reply_text("Valor inválido. Digite novamente:")
+        return VALOR
+
+async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    descricao = update.message.text
+    context.user_data['descricao'] = descricao
+
+    adicionar_transacao(
+        context.user_data['tipo'],
+        context.user_data['categoria'],
+        context.user_data['valor'],
+        descricao
+    )
+    await update.message.reply_text("✅ Transação adicionada com sucesso!", reply_markup=teclado_principal)
+    return TIPO
+
+async def receber_relatorio_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    agora = datetime.now()
+    inicio_mes = agora.replace(day=1).strftime('%Y-%m-%d')
+    fim_mes = agora.strftime('%Y-%m-%d')
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT tipo, categoria, valor, descricao, data FROM transacoes WHERE data BETWEEN ? AND ?", (inicio_mes, fim_mes))
+        transacoes = cursor.fetchall()
+
+    if not transacoes:
+        await update.message.reply_text("📭 Nenhuma transação encontrada neste mês.")
+        return TIPO
+
+    texto = "\n".join([f"{t[4]} - {t[0].capitalize()} - {t[1]}: R$ {t[2]:.2f} ({t[3]})" for t in transacoes])
+    await update.message.reply_text(f"📊 Transações do mês:\n\n{texto}")
+    return TIPO
+
+async def agendar_categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['categoria'] = query.data
+    await query.edit_message_text("Digite o valor da despesa agendada:")
+    return AGENDAR_VALOR
+
+async def agendar_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        valor = float(update.message.text.replace(',', '.'))
+        context.user_data['valor'] = valor
+        await update.message.reply_text("Digite o vencimento (formato YYYY-MM-DD):")
+        return AGENDAR_VENCIMENTO
+    except ValueError:
+        await update.message.reply_text("Valor inválido. Digite novamente:")
+        return AGENDAR_VALOR
+
+async def agendar_vencimento(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    vencimento = update.message.text.strip()
+    try:
+        datetime.strptime(vencimento, '%Y-%m-%d')
+        context.user_data['vencimento'] = vencimento
+        await update.message.reply_text("Digite uma descrição para a despesa agendada:")
+        return AGENDAR_DESCRICAO
+    except ValueError:
+        await update.message.reply_text("Data inválida. Use o formato YYYY-MM-DD:")
+        return AGENDAR_VENCIMENTO
+
+async def agendar_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    descricao = update.message.text.strip()
+    context.user_data['descricao'] = descricao
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute('''INSERT INTO despesas_agendadas (categoria, valor, vencimento, descricao)
+                        VALUES (?, ?, ?, ?)''', (
+            context.user_data['categoria'],
+            context.user_data['valor'],
+            context.user_data['vencimento'],
+            descricao
+        ))
+        conn.commit()
+
+    await update.message.reply_text("✅ Despesa agendada com sucesso!", reply_markup=teclado_principal)
+    return TIPO
+
+async def excluir_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Lógica para excluir transações (a ser implementada conforme necessário)
+    await update.callback_query.answer("Função de exclusão ainda não implementada.")
+    return TIPO
+
+async def pagar_despesa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Lógica para pagar despesas agendadas (a ser implementada conforme necessário)
+    await update.message.reply_text("Função de pagamento ainda não implementada.")
+
+async def notificar_despesas_vencendo(context: ContextTypes.DEFAULT_TYPE):
+    # Lógica para notificar sobre despesas agendadas vencendo (a ser implementada conforme necessário)
+    pass
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -121,7 +250,6 @@ def main():
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler('pagar', pagar_despesa))
 
-    # Agendamento diário às 9h para notificações
     job_queue = app.job_queue
     now = datetime.now()
     proximo_9h = datetime.combine(now.date(), time(hour=9))
