@@ -12,15 +12,15 @@ SENHA, TIPO, CATEGORIA, VALOR, DESCRICAO, RELATORIO, AGENDAR_CATEGORIA, AGENDAR_
 DB_PATH = "financeiro.db"
 
 # --- Categorias ---
-CATEGORIAS_RECEITA = ["💳 Vendas Créditos", "💵 Salário", "🎁 Outros"]
-CATEGORIAS_DESPESA = ["🏠 Aluguel", "🍔 Alimentação", "🚗 Transporte", "📱 Internet", "🎁 Outros"]
+CATEGORIAS_RECEITA = ["💳 Vendas Créditos", "💵 Salário", "🏱 Outros"]
+CATEGORIAS_DESPESA = ["🏠 Aluguel", "🍔 Alimentação", "🚗 Transporte", "📱 Internet", "🏱 Outros"]
 
 # --- Teclados ---
 def teclado_principal():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Adicionar Receita", callback_data="adicionar_receita")],
         [InlineKeyboardButton("➖ Adicionar Despesa", callback_data="adicionar_despesa")],
-        [InlineKeyboardButton("📅 Agendar Despesa", callback_data="agendar_despesa")],
+        [InlineKeyboardButton("🗕️ Agendar Despesa", callback_data="agendar_despesa")],
         [InlineKeyboardButton("📊 Ver Relatório", callback_data="relatorio")],
         [InlineKeyboardButton("🗓️ Ver Agendadas", callback_data="ver_agendadas")]
     ])
@@ -57,26 +57,30 @@ def adicionar_transacao(tipo, categoria, valor, descricao):
                         VALUES (?, ?, ?, ?, ?)''', (tipo, categoria, valor, descricao, datetime.now().strftime("%d/%m/%Y")))
         conn.commit()
 
-# --- Categoria Callback ---
-async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    categoria = query.data
-    context.user_data["categoria"] = categoria
+# --- Receber Valor ---
+async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip().replace(",", ".")
+    try:
+        valor = float(texto)
+        context.user_data['valor'] = valor
+        await update.message.reply_text("Descreva brevemente essa transação:", reply_markup=teclado_voltar_cancelar())
+        return DESCRICAO
+    except ValueError:
+        await update.message.reply_text("Digite um valor válido.", reply_markup=teclado_voltar_cancelar())
+        return VALOR
 
-    if categoria in CATEGORIAS_RECEITA:
-        context.user_data["tipo"] = "receita"
-    elif categoria in CATEGORIAS_DESPESA:
-        context.user_data["tipo"] = "despesa"
-    else:
-        await query.message.reply_text("Categoria inválida.")
-        return CATEGORIA
+# --- Receber Descrição ---
+async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    descricao = update.message.text.strip()
+    categoria = context.user_data.get("categoria")
+    valor = context.user_data.get("valor")
+    tipo = context.user_data.get("tipo")
+    adicionar_transacao(tipo, categoria, valor, descricao)
+    await update.message.reply_text("Transação registrada com sucesso!", reply_markup=teclado_principal())
+    return TIPO
 
-    await query.message.reply_text("Digite o valor (ex: 123.45):", reply_markup=teclado_voltar_cancelar())
-    return VALOR
-
-# --- Fluxos de conversa (já estavam implementados e foram mantidos) ---
-# (inclui: remover_transacao, receber_valor, receber_descricao, agendar_categoria, agendar_valor, agendar_vencimento, agendar_descricao)
+# --- Fluxos de conversa (continua abaixo) ---
+# (inclui: remover_transacao, categoria_callback, agendar_categoria, agendar_valor, agendar_vencimento, agendar_descricao)
 
 # --- Ver Relatório ---
 async def solicitar_mes_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,7 +100,7 @@ async def gerar_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         receitas = sum(v for t, v in transacoes if t == "receita")
         despesas = sum(v for t, v in transacoes if t == "despesa")
         saldo = receitas - despesas
-        await update.message.reply_text(f"📅 *Relatório de {data_formatada}*\n\n📈 Receitas: R$ {receitas:.2f}\n📉 Despesas: R$ {despesas:.2f}\n💰 Saldo: R$ {saldo:.2f}", parse_mode="Markdown", reply_markup=teclado_principal())
+        await update.message.reply_text(f"🗓️ *Relatório de {data_formatada}*\n\n📈 Receitas: R$ {receitas:.2f}\n📉 Despesas: R$ {despesas:.2f}\n💰 Saldo: R$ {saldo:.2f}", parse_mode="Markdown", reply_markup=teclado_principal())
     except Exception:
         await update.message.reply_text("Formato inválido. Use MM/AAAA.", reply_markup=teclado_voltar_cancelar())
         return RELATORIO
@@ -114,9 +118,9 @@ async def ver_despesas_agendadas(update: Update, context: ContextTypes.DEFAULT_T
         await update.callback_query.message.reply_text("Nenhuma despesa agendada encontrada.", reply_markup=teclado_principal())
         return TIPO
 
-    texto = "📅 *Despesas Agendadas:*\n\n"
+    texto = "🗓️ *Despesas Agendadas:*\n\n"
     for cat, val, venc, desc in dados:
-        texto += f"🔸 {cat} - R$ {val:.2f} - {venc} - {desc}\n"
+        texto += f"🔹 {cat} - R$ {val:.2f} - {venc} - {desc}\n"
     await update.callback_query.message.reply_text(texto, parse_mode="Markdown", reply_markup=teclado_principal())
     return TIPO
 
