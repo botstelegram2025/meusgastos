@@ -26,7 +26,7 @@ REMOVER_SELECIONAR = 10
 TOKEN = os.environ.get("BOT_TOKEN")
 DB_PATH = 'financeiro.db'
 
-CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", "Adesão APP", "Vendas Créditos", "Saldo Inicial"]
+CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", "Adesão APP", "Vendas Créditos", "Salco Inicial"]
 CATEGORIAS_DESPESA = ["Alimentação", "Transporte", "Lazer", "Saúde", "Moradia", "Educação", "Cartões", "Outros"]
 
 teclado_principal = ReplyKeyboardMarkup([
@@ -44,6 +44,7 @@ def teclado_voltar_cancelar():
 
 usuarios_autorizados = set()
 
+
 def criar_tabelas():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -53,13 +54,30 @@ def criar_tabelas():
         cursor.execute('''CREATE TABLE IF NOT EXISTS despesas_agendadas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             categoria TEXT, valor REAL, vencimento TEXT, descricao TEXT, status TEXT DEFAULT 'pendente')''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS usuarios (
+            user_id INTEGER PRIMARY KEY)''')
         conn.commit()
+
+
+def usuario_autorizado(user_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM usuarios WHERE user_id = ?", (user_id,))
+        return cursor.fetchone() is not None
+
+
+def autorizar_usuario(user_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("INSERT OR IGNORE INTO usuarios (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+
 
 def adicionar_transacao(tipo, categoria, valor, descricao):
     data = datetime.now().strftime('%d/%m/%Y')
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute('''INSERT INTO transacoes (tipo, categoria, valor, data, descricao)
                         VALUES (?, ?, ?, ?, ?)''', (tipo, categoria, valor, data, descricao))
+
 
 def calcular_saldo():
     with sqlite3.connect(DB_PATH) as conn:
@@ -70,26 +88,29 @@ def calcular_saldo():
         despesas = cursor.fetchone()[0] or 0
     return receitas - despesas
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     criar_tabelas()
     user_id = update.message.from_user.id
-    if user_id not in usuarios_autorizados:
+    if not usuario_autorizado(user_id):
         await update.message.reply_text("Por favor, digite a senha para acessar o bot:")
         return SENHA
     else:
         await update.message.reply_text("Bem-vindo ao Bot Financeiro!", reply_markup=teclado_principal)
         return TIPO
 
+
 async def verificar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     senha = update.message.text.strip()
     if senha == "1523":
-        usuarios_autorizados.add(user_id)
+        autorizar_usuario(user_id)
         await update.message.reply_text("Senha correta! Você pode usar o bot agora.", reply_markup=teclado_principal)
         return TIPO
     else:
         await update.message.reply_text("Senha incorreta. Tente novamente:")
         return SENHA
+
 
 async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.lower()
@@ -140,6 +161,7 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escolha uma opção válida.", reply_markup=teclado_principal)
     return TIPO
 
+
 async def selecionar_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -149,6 +171,7 @@ async def selecionar_categoria(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data['categoria'] = categoria
     await query.message.reply_text(f"Digite o valor da {tipo}:", reply_markup=teclado_voltar_cancelar())
     return VALOR
+
 
 async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip().replace(',', '.')
@@ -161,6 +184,7 @@ async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Valor inválido. Digite apenas números. Ex: 1500.00", reply_markup=teclado_voltar_cancelar())
         return VALOR
 
+
 async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     descricao = update.message.text.strip()
     tipo = context.user_data.get('tipo')
@@ -169,6 +193,7 @@ async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     adicionar_transacao(tipo, categoria, valor, descricao)
     await update.message.reply_text(f"{tipo.capitalize()} adicionada com sucesso!", reply_markup=teclado_principal)
     return TIPO
+
 
 async def remover_selecao_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -182,6 +207,7 @@ async def remover_selecao_callback(update: Update, context: ContextTypes.DEFAULT
             conn.commit()
         await query.message.reply_text(f"Transação {id_remover} removida com sucesso!", reply_markup=teclado_principal)
         return TIPO
+
 
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
@@ -202,6 +228,7 @@ def main():
 
     application.add_handler(conv_handler)
     application.run_polling()
+
 
 if __name__ == "__main__":
     main()
