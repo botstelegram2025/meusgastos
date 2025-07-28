@@ -57,8 +57,26 @@ def adicionar_transacao(tipo, categoria, valor, descricao):
                         VALUES (?, ?, ?, ?, ?)''', (tipo, categoria, valor, descricao, datetime.now().strftime("%d/%m/%Y")))
         conn.commit()
 
+# --- Categoria Callback ---
+async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    categoria = query.data
+    context.user_data["categoria"] = categoria
+
+    if categoria in CATEGORIAS_RECEITA:
+        context.user_data["tipo"] = "receita"
+    elif categoria in CATEGORIAS_DESPESA:
+        context.user_data["tipo"] = "despesa"
+    else:
+        await query.message.reply_text("Categoria inválida.")
+        return CATEGORIA
+
+    await query.message.reply_text("Digite o valor (ex: 123.45):", reply_markup=teclado_voltar_cancelar())
+    return VALOR
+
 # --- Fluxos de conversa (já estavam implementados e foram mantidos) ---
-# (inclui: remover_transacao, categoria_callback, receber_valor, receber_descricao, agendar_categoria, agendar_valor, agendar_vencimento, agendar_descricao)
+# (inclui: remover_transacao, receber_valor, receber_descricao, agendar_categoria, agendar_valor, agendar_vencimento, agendar_descricao)
 
 # --- Ver Relatório ---
 async def solicitar_mes_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
