@@ -150,6 +150,26 @@ async def selecionar_categoria(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.message.reply_text(f"Digite o valor da {tipo}:", reply_markup=teclado_voltar_cancelar())
     return VALOR
 
+async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip().replace(',', '.')
+    try:
+        valor = float(texto)
+        context.user_data['valor'] = valor
+        await update.message.reply_text("Digite uma descrição (ou apenas envie para pular):", reply_markup=teclado_voltar_cancelar())
+        return DESCRICAO
+    except ValueError:
+        await update.message.reply_text("Valor inválido. Digite apenas números. Ex: 1500.00", reply_markup=teclado_voltar_cancelar())
+        return VALOR
+
+async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    descricao = update.message.text.strip()
+    tipo = context.user_data.get('tipo')
+    categoria = context.user_data.get('categoria')
+    valor = context.user_data.get('valor')
+    adicionar_transacao(tipo, categoria, valor, descricao)
+    await update.message.reply_text(f"{tipo.capitalize()} adicionada com sucesso!", reply_markup=teclado_principal)
+    return TIPO
+
 async def remover_selecao_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -172,8 +192,8 @@ def main():
             SENHA: [MessageHandler(filters.TEXT & ~filters.COMMAND, verificar_senha)],
             TIPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
             CATEGORIA: [CallbackQueryHandler(selecionar_categoria)],
-            VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
-            DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
+            VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
+            DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)],
             RELATORIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
             REMOVER_SELECIONAR: [CallbackQueryHandler(remover_selecao_callback, pattern="^remover_\\d+$")],
         },
