@@ -1,5 +1,5 @@
-import os  # <<< Correção: para ler BOT_TOKEN do ambiente
-import sys  # <<< Correção: para encerrar com mensagem clara se faltar token
+import os
+import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -81,14 +81,12 @@ def adicionar_despesa_agendada(categoria, valor, vencimento, descricao):
         )
         conn.commit()
 
-# --- Handlers de navegação ---
+# --- Navegação básica ---
 async def handle_voltar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Volta ao menu principal
     await update.message.reply_text("Voltando ao menu principal…", reply_markup=teclado_principal())
     return TIPO
 
 async def handle_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Cancela o fluxo atual e volta ao menu
     await update.message.reply_text("Operação cancelada.", reply_markup=teclado_principal())
     return TIPO
 
@@ -105,8 +103,7 @@ async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # --- Receber Valor ---
 async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip().replace(",", ".")
-    if texto in (VOLTA_TXT, CANCELA_TXT):  # <<< Correção: protege contra teclas especiais
-        # Delega para handlers já mapeados no ConversationHandler
+    if texto in (VOLTA_TXT, CANCELA_TXT):
         return
     try:
         valor = float(texto)
@@ -120,19 +117,19 @@ async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Receber Descrição ---
 async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     descricao = update.message.text.strip()
-    if descricao in (VOLTA_TXT, CANCELA_TXT):  # <<< Correção: protege contra teclas especiais
+    if descricao in (VOLTA_TXT, CANCELA_TXT):
         return
     categoria = context.user_data.get("categoria")
     valor = context.user_data.get("valor")
     tipo = context.user_data.get("tipo")
-    if categoria is None or valor is None or tipo is None:  # <<< Correção: valida fluxo
-        await update.message.reply_text("Algo deu errado. Recomeçando fluxo.", reply_markup=teclado_principal())
+    if categoria and valor and tipo:
+        adicionar_transacao(tipo, categoria, valor, descricao)
+        await update.message.reply_text("✅ Transação registrada com sucesso!", reply_markup=teclado_principal())
         return TIPO
-    adicionar_transacao(tipo, categoria, valor, descricao)
-    await update.message.reply_text("✅ Transação registrada com sucesso!", reply_markup=teclado_principal())
+    await update.message.reply_text("Algo deu errado. Tente novamente.", reply_markup=teclado_principal())
     return TIPO
 
-# --- Agendar Despesa ---
+# --- Agendamento ---
 async def agendar_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -170,17 +167,16 @@ async def agendar_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     descricao = update.message.text.strip()
     if descricao in (VOLTA_TXT, CANCELA_TXT):
         return
-    categoria = context.user_data.get("categoria")
-    valor = context.user_data.get("valor")
-    vencimento = context.user_data.get("vencimento")
-    if not all([categoria, valor, vencimento]):  # <<< Correção: valida fluxo
-        await update.message.reply_text("Algo deu errado. Recomeçando fluxo.", reply_markup=teclado_principal())
-        return TIPO
-    adicionar_despesa_agendada(categoria, valor, vencimento, descricao)
+    adicionar_despesa_agendada(
+        context.user_data["categoria"],
+        context.user_data["valor"],
+        context.user_data["vencimento"],
+        descricao
+    )
     await update.message.reply_text("✅ Despesa agendada com sucesso!", reply_markup=teclado_principal())
     return TIPO
 
-# --- Ver Relatório ---
+# --- Relatório ---
 async def solicitar_mes_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.message.reply_text(
@@ -196,10 +192,7 @@ async def gerar_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         mes, ano = entrada.split("/")
         mes = mes.zfill(2)
-        if len(ano) != 4 or not ano.isdigit():
-            raise ValueError
-        # Datas são salvas como DD/MM/AAAA, então buscamos por %/MM/AAAA
-        like = f"%/{mes}/{ano}"  # <<< Correção: padrão LIKE correto
+        like = f"%/{mes}/{ano}"
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT tipo, valor FROM transacoes WHERE data LIKE ?", (like,))
@@ -226,11 +219,9 @@ async def ver_despesas_agendadas(update: Update, context: ContextTypes.DEFAULT_T
         cursor = conn.cursor()
         cursor.execute("SELECT categoria, valor, vencimento, descricao FROM despesas_agendadas")
         dados = cursor.fetchall()
-
     if not dados:
         await update.callback_query.message.reply_text("Nenhuma despesa agendada encontrada.", reply_markup=teclado_principal())
         return TIPO
-
     texto = "🗓️ *Despesas Agendadas:*\n\n"
     for cat, val, venc, desc in dados:
         texto += f"🔹 {cat} - R$ {val:.2f} - {venc} - {desc}\n"
@@ -246,9 +237,8 @@ async def verificar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "1523":
         await update.message.reply_text("✅ Acesso autorizado! Escolha uma opção:", reply_markup=teclado_principal())
         return TIPO
-    else:
-        await update.message.reply_text("❌ Senha incorreta. Tente novamente:")
-        return SENHA
+    await update.message.reply_text("❌ Senha incorreta. Tente novamente:")
+    return SENHA
 
 async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -279,73 +269,36 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     criar_tabelas()
 
-    # --- Leitura e validação do token ---
-    token = os.getenv("BOT_TOKEN", "").strip()  # <<< Correção: lê do ambiente
+    token = os.getenv("BOT_TOKEN", "").strip()
     if not token or ":" not in token:
-        print(
-            "ERRO: BOT_TOKEN ausente ou inválido.\n"
-            "Defina a variável de ambiente BOT_TOKEN com o token do BotFather "
-            "(ex.: 123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11)."
-        )
-        sys.exit(1)  # <<< Correção: encerra antes de tentar iniciar
+        print("⚠️ BOT_TOKEN inválido ou não configurado. Defina a variável de ambiente corretamente.")
+        sys.exit(1)
 
-    app = Application.builder().token(token).build()  # <<< Correção: Application.builder()
+    app = Application.builder().token(token).build()
 
-    # Handlers comuns para Voltar/Cancelar (em todos os estados via ConversationHandler)
     voltar_handler = MessageHandler(filters.TEXT & filters.Regex(f"^{VOLTA_TXT}$"), handle_voltar)
     cancelar_handler = MessageHandler(filters.TEXT & filters.Regex(f"^{CANCELA_TXT}$"), handle_cancelar)
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            SENHA: [
-                cancelar_handler, voltar_handler,  # <<< Correção: handlers de navegação
-                MessageHandler(filters.TEXT & ~filters.COMMAND, verificar_senha),
-            ],
-            TIPO: [
-                CallbackQueryHandler(escolher_tipo),
-            ],
-            CATEGORIA: [
-                CallbackQueryHandler(categoria_callback),
-            ],
-            VALOR: [
-                cancelar_handler, voltar_handler,  # <<< Correção
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor),
-            ],
-            DESCRICAO: [
-                cancelar_handler, voltar_handler,  # <<< Correção
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao),
-            ],
-            RELATORIO: [
-                cancelar_handler, voltar_handler,  # <<< Correção
-                MessageHandler(filters.TEXT & ~filters.COMMAND, gerar_relatorio),
-            ],
-            AGENDAR_CATEGORIA: [
-                CallbackQueryHandler(agendar_categoria),
-            ],
-            AGENDAR_VALOR: [
-                cancelar_handler, voltar_handler,  # <<< Correção
-                MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_valor),
-            ],
-            AGENDAR_VENCIMENTO: [
-                cancelar_handler, voltar_handler,  # <<< Correção
-                MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_vencimento),
-            ],
-            AGENDAR_DESCRICAO: [
-                cancelar_handler, voltar_handler,  # <<< Correção
-                MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_descricao),
-            ],
+            SENHA: [voltar_handler, cancelar_handler, MessageHandler(filters.TEXT, verificar_senha)],
+            TIPO: [CallbackQueryHandler(escolher_tipo)],
+            CATEGORIA: [CallbackQueryHandler(categoria_callback)],
+            VALOR: [voltar_handler, cancelar_handler, MessageHandler(filters.TEXT, receber_valor)],
+            DESCRICAO: [voltar_handler, cancelar_handler, MessageHandler(filters.TEXT, receber_descricao)],
+            RELATORIO: [voltar_handler, cancelar_handler, MessageHandler(filters.TEXT, gerar_relatorio)],
+            AGENDAR_CATEGORIA: [CallbackQueryHandler(agendar_categoria)],
+            AGENDAR_VALOR: [voltar_handler, cancelar_handler, MessageHandler(filters.TEXT, agendar_valor)],
+            AGENDAR_VENCIMENTO: [voltar_handler, cancelar_handler, MessageHandler(filters.TEXT, agendar_vencimento)],
+            AGENDAR_DESCRICAO: [voltar_handler, cancelar_handler, MessageHandler(filters.TEXT, agendar_descricao)],
         },
-        fallbacks=[CommandHandler("cancel", handle_cancelar)],
-        per_message=True,  # <<< Correção: elimina o PTBUserWarning para CallbackQueryHandler
+        fallbacks=[CommandHandler("cancel", handle_cancelar)]
     )
 
     app.add_handler(conv_handler)
-    print("Bot rodando...")
-    try:
-        app.run_polling(allowed_updates=Update.ALL_TYPES)  # <<< Correção: garante receber mensagens e callbacks
-    except KeyboardInterrupt:
-        print("Bot finalizado.")
+    print("✅ Bot rodando...")
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
