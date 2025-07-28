@@ -1,13 +1,17 @@
 import sqlite3
 import os
 from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import (
+    Update, ReplyKeyboardMarkup, ReplyKeyboardRemove,
+    InlineKeyboardMarkup, InlineKeyboardButton
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -52,9 +56,11 @@ def calcular_saldo():
 TIPO, CATEGORIA, VALOR, DESCRICAO = range(4)
 
 CATEGORIAS_RECEITA = [
-    ["Salário mensal", "Vale Alimentação"],
-    ["Vendas Canais", "Adesão APP"],
-    ["Outra"]
+    "Salário mensal",
+    "Vale Alimentação",
+    "Vendas Canais",
+    "Adesão APP",
+    "Outra"
 ]
 
 TECLADO_PRINCIPAL = ReplyKeyboardMarkup(
@@ -74,9 +80,15 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text
     if texto == "➕ Receita":
         context.user_data['tipo'] = 'receita'
-        reply_markup = ReplyKeyboardMarkup(CATEGORIAS_RECEITA, resize_keyboard=True, one_time_keyboard=True)
+
+        # Monta os botões inline para categorias
+        keyboard = [
+            [InlineKeyboardButton(cat, callback_data=cat)] for cat in CATEGORIAS_RECEITA
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
         await update.message.reply_text(
-            "📂 Escolha uma categoria para a receita ou selecione 'Outra' para digitar manualmente:",
+            "📂 Escolha uma categoria para a receita:",
             reply_markup=reply_markup
         )
         return CATEGORIA
@@ -106,25 +118,40 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Por favor, escolha uma opção válida usando os botões.")
         return TIPO
 
+# Tratador dos botões inline para categoria receita
+async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    categoria = query.data
+    if categoria == "Outra":
+        await query.edit_message_text(
+            "Digite a categoria da receita manualmente:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return CATEGORIA  # continua esperando input texto manual
+
+    context.user_data['categoria'] = categoria
+    await query.edit_message_text(f"Categoria selecionada: *{categoria}*\n\n💵 Agora digite o *valor* (exemplo: 123.45):",
+                                  parse_mode='Markdown')
+    return VALOR
+
 async def receber_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Só cai aqui se for despesa ou categoria receita digitada manualmente (caso "Outra")
     texto = update.message.text.strip()
     tipo = context.user_data.get('tipo')
 
     if tipo == 'receita':
-        if texto == 'Outra':
-            await update.message.reply_text(
-                "Digite a categoria da receita manualmente:",
-                reply_markup=ReplyKeyboardRemove()
-            )
+        if texto == '':
+            await update.message.reply_text("❌ Categoria inválida. Digite novamente:")
             return CATEGORIA
-        else:
-            context.user_data['categoria'] = texto
-            await update.message.reply_text("💵 Agora digite o *valor* (exemplo: 123.45):", parse_mode='Markdown')
-            return VALOR
+        context.user_data['categoria'] = texto
+        await update.message.reply_text("💵 Agora digite o *valor* (exemplo: 123.45):", parse_mode='Markdown')
+        return VALOR
 
     else:
-        if not texto:
-            await update.message.reply_text("❌ Categoria inválida. Tente novamente:")
+        if texto == '':
+            await update.message.reply_text("❌ Categoria inválida. Digite novamente:")
             return CATEGORIA
         context.user_data['categoria'] = texto
         await update.message.reply_text("💵 Agora digite o *valor* (exemplo: 123.45):", parse_mode='Markdown')
@@ -212,21 +239,11 @@ def main():
         entry_points=[CommandHandler('start', start), MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
         states={
             TIPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
-            CATEGORIA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_categoria)],
+            CATEGORIA: [
+                CallbackQueryHandler(categoria_callback),  # captura cliques em botões inline categoria receita
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_categoria)  # input texto manual (despesa ou categoria receita "Outra")
+            ],
             VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
             DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)],
         },
-        fallbacks=[CommandHandler('cancelar', cancelar)],
-        allow_reentry=True
-    )
-
-    app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("relatorio", comando_relatorio))
-    app.add_handler(CommandHandler("deletar", comando_deletar))
-    app.add_handler(CommandHandler("saldo", comando_saldo))
-
-    print("✅ Bot rodando...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+        fallbacks=[CommandHandler('cancelar',
