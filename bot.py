@@ -140,6 +140,16 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escolha uma opção válida.", reply_markup=teclado_principal)
     return TIPO
 
+async def selecionar_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    categoria = query.data
+    tipo = 'receita' if categoria in CATEGORIAS_RECEITA else 'despesa'
+    context.user_data['tipo'] = tipo
+    context.user_data['categoria'] = categoria
+    await query.message.reply_text(f"Digite o valor da {tipo}:", reply_markup=teclado_voltar_cancelar())
+    return VALOR
+
 async def remover_selecao_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -153,8 +163,6 @@ async def remover_selecao_callback(update: Update, context: ContextTypes.DEFAULT
         await query.message.reply_text(f"Transação {id_remover} removida com sucesso!", reply_markup=teclado_principal)
         return TIPO
 
-# ... (Demais funções continuam como no exemplo anterior)
-
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
 
@@ -163,10 +171,10 @@ def main():
         states={
             SENHA: [MessageHandler(filters.TEXT & ~filters.COMMAND, verificar_senha)],
             TIPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
-            CATEGORIA: [CallbackQueryHandler(categoria_callback)],
-            VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
-            DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)],
-            RELATORIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_relatorio_mes)],
+            CATEGORIA: [CallbackQueryHandler(selecionar_categoria)],
+            VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
+            DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
+            RELATORIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
             REMOVER_SELECIONAR: [CallbackQueryHandler(remover_selecao_callback, pattern="^remover_\\d+$")],
         },
         fallbacks=[MessageHandler(filters.Regex("^(❌ Cancelar|⬅️ Voltar)$"), escolher_tipo)]
