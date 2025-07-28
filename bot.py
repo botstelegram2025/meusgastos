@@ -18,16 +18,21 @@ from telegram.ext import (
     ConversationHandler,
 )
 
+# Estados da conversa
 TIPO, CATEGORIA, VALOR, DESCRICAO, RELATORIO = range(5)
 AGENDAR_CATEGORIA, AGENDAR_VALOR, AGENDAR_VENCIMENTO, AGENDAR_DESCRICAO = range(5, 9)
-EXCLUIR = 9  # Novo estado
+EXCLUIR = 9
+AUTENTICACAO = 10  # Novo estado para senha
 
+# Configurações
 TOKEN = os.environ.get("BOT_TOKEN")
 DB_PATH = 'financeiro.db'
 
+# Categorias
 CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", "Adesão APP", "Vendas Créditos"]
 CATEGORIAS_DESPESA = ["Alimentação", "Transporte", "Lazer", "Saúde", "Moradia", "Educação", "Outros"]
 
+# Teclado principal
 teclado_principal = ReplyKeyboardMarkup([
     [KeyboardButton("💰 Adicionar Receita"), KeyboardButton("🛒 Adicionar Despesa")],
     [KeyboardButton("📊 Relatório"), KeyboardButton("💵 Saldo")],
@@ -41,6 +46,7 @@ def teclado_voltar_cancelar():
         [KeyboardButton("⬅️ Voltar"), KeyboardButton("❌ Cancelar")]
     ], resize_keyboard=True)
 
+# Banco de dados
 def criar_tabelas():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -67,16 +73,27 @@ def calcular_saldo():
         despesas = cursor.fetchone()[0] or 0
     return receitas - despesas
 
-# --- Funções principais ---
+# --- Autenticação ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    criar_tabelas()
-    if not context.user_data.get('autenticado'):
-        await update.message.reply_text("Digite a senha de acesso:")
-        return 100
-    criar_tabelas()
-    await update.message.reply_text("Bem-vindo ao Bot Financeiro!", reply_markup=teclado_principal)
-    return TIPO
+    if context.user_data.get("autenticado"):
+        criar_tabelas()
+        await update.message.reply_text("Bem-vindo de volta!", reply_markup=teclado_principal)
+        return TIPO
 
+    await update.message.reply_text("Digite a senha de acesso:")
+    return AUTENTICACAO
+
+async def autenticar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "1523":
+        context.user_data["autenticado"] = True
+        criar_tabelas()
+        await update.message.reply_text("Acesso autorizado. ✅", reply_markup=teclado_principal)
+        return TIPO
+    else:
+        await update.message.reply_text("Senha incorreta. Tente novamente:")
+        return AUTENTICACAO
+
+# --- Menu Principal ---
 async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.lower()
 
@@ -121,6 +138,7 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escolha uma opção válida.", reply_markup=teclado_principal)
     return TIPO
 
+# --- Receita/Despesa ---
 async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -161,20 +179,12 @@ async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return VALOR
 
     descricao = update.message.text if texto != 'nenhuma' else ''
-    tipo = context.user_data['tipo']
-    adicionar_transacao(tipo, context.user_data['categoria'], context.user_data['valor'], descricao)
+    adicionar_transacao(context.user_data['tipo'], context.user_data['categoria'], context.user_data['valor'], descricao)
     await update.message.reply_text("Transação registrada com sucesso! ✅", reply_markup=teclado_principal)
     return TIPO
 
+# --- Relatório ---
 async def receber_relatorio_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.lower()
-    if texto in ["❌ cancelar", "cancelar"]:
-        await update.message.reply_text("Operação cancelada.", reply_markup=teclado_principal)
-        return TIPO
-    if texto in ["⬅️ voltar", "voltar"]:
-        await update.message.reply_text("Voltando ao menu principal.", reply_markup=teclado_principal)
-        return TIPO
-
     mes = update.message.text.zfill(2)
     if not mes.isdigit() or not (1 <= int(mes) <= 12):
         await update.message.reply_text("Mês inválido. Digite no formato MM (ex: 07 para julho):")
@@ -212,15 +222,6 @@ async def agendar_categoria_callback(update: Update, context: ContextTypes.DEFAU
     return AGENDAR_VALOR
 
 async def agendar_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.lower()
-    if texto in ["❌ cancelar", "cancelar"]:
-        await update.message.reply_text("Operação cancelada.", reply_markup=teclado_principal)
-        return TIPO
-    if texto in ["⬅️ voltar", "voltar"]:
-        buttons = [[InlineKeyboardButton(cat, callback_data=cat)] for cat in CATEGORIAS_DESPESA]
-        await update.message.reply_text("Categoria da despesa agendada:", reply_markup=InlineKeyboardMarkup(buttons))
-        return AGENDAR_CATEGORIA
-
     try:
         valor = float(update.message.text.replace(',', '.'))
         if valor <= 0:
@@ -233,13 +234,6 @@ async def agendar_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGENDAR_VALOR
 
 async def agendar_vencimento(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.lower()
-    if texto in ["❌ cancelar", "cancelar"]:
-        await update.message.reply_text("Operação cancelada.", reply_markup=teclado_principal)
-        return TIPO
-    if texto in ["⬅️ voltar", "voltar"]:
-        await update.message.reply_text("Digite o valor da despesa agendada:", reply_markup=teclado_voltar_cancelar())
-        return AGENDAR_VALOR
     try:
         venc = datetime.strptime(update.message.text, "%Y-%m-%d").date()
         if venc < datetime.today().date():
@@ -252,23 +246,12 @@ async def agendar_vencimento(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return AGENDAR_VENCIMENTO
 
 async def agendar_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.lower()
-    if texto in ["❌ cancelar", "cancelar"]:
-        await update.message.reply_text("Operação cancelada.", reply_markup=teclado_principal)
-        return TIPO
-    if texto in ["⬅️ voltar", "voltar"]:
-        await update.message.reply_text("Digite a data de vencimento (YYYY-MM-DD):", reply_markup=teclado_voltar_cancelar())
-        return AGENDAR_VENCIMENTO
-
-    descricao = update.message.text if texto != 'nenhuma' else ''
+    descricao = update.message.text if update.message.text.lower() != 'nenhuma' else ''
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute('''INSERT INTO despesas_agendadas (categoria, valor, vencimento, descricao)
                         VALUES (?, ?, ?, ?)''', (context.user_data['categoria'], context.user_data['valor'], context.user_data['vencimento'], descricao))
     await update.message.reply_text("Despesa agendada com sucesso! ✅", reply_markup=teclado_principal)
     return TIPO
-
-
-
 
 async def listar_despesas_agendadas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with sqlite3.connect(DB_PATH) as conn:
@@ -281,67 +264,15 @@ async def listar_despesas_agendadas(update: Update, context: ContextTypes.DEFAUL
         return TIPO
 
     for desp in despesas:
-        msg = f"""ID: {desp[0]}
-Categoria: {desp[1]}
-Valor: R$ {desp[2]:.2f}
-Vencimento: {desp[3]}
-Descrição: {desp[4]}
-Status: {desp[5]}"""
-        botao = InlineKeyboardMarkup.from_button(
-            InlineKeyboardButton("✅ Marcar como paga", callback_data=f"pagar_{desp[0]}")
-        )
-        await update.message.reply_text(msg, reply_markup=botao)
-
-    return TIPO
-
-
-    for desp in despesas:
-        msg = (
-            f"ID: {desp[0]}
-"
-            f"Categoria: {desp[1]}
-"
-            f"Valor: R$ {desp[2]:.2f}
-"
-            f"Vencimento: {desp[3]}
-"
-            f"Descrição: {desp[4]}
-"
-            f"Status: {desp[5]}"
-        )
-        botao = InlineKeyboardMarkup.from_button(
-            InlineKeyboardButton("✅ Marcar como paga", callback_data=f"pagar_{desp[0]}")
-        )
-        await update.message.reply_text(msg, reply_markup=botao)
-
-    return TIPO
-
-
-    for desp in despesas:
-        msg = (f"ID: {desp[0]}
-Categoria: {desp[1]}
-Valor: R$ {desp[2]:.2f}
-"
-               f"Vencimento: {desp[3]}
-Descrição: {desp[4]}
-Status: {desp[5]}")
-        botao = InlineKeyboardMarkup.from_button(
-            InlineKeyboardButton("✅ Marcar como paga", callback_data=f"pagar_{desp[0]}")
-        )
-        await update.message.reply_text(msg, reply_markup=botao)
-
-    return TIPO
-
-
-    for desp in despesas:
         msg = (f"ID: {desp[0]}\nCategoria: {desp[1]}\nValor: R$ {desp[2]:.2f}\n"
                f"Vencimento: {desp[3]}\nDescrição: {desp[4]}\nStatus: {desp[5]}")
-        await update.message.reply_text(msg)
-
-    await update.message.reply_text("Use o botão abaixo para pagar uma despesa:", reply_markup=teclado_principal)
+        botao = InlineKeyboardMarkup.from_button(
+            InlineKeyboardButton("✅ Marcar como paga", callback_data=f"pagar_{desp[0]}")
+        )
+        await update.message.reply_text(msg, reply_markup=botao)
     return TIPO
 
-# --- NOVAS FUNÇÕES: Excluir Transação ---
+# --- Excluir Transação ---
 async def listar_transacoes_para_excluir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -364,7 +295,6 @@ async def listar_transacoes_para_excluir(update: Update, context: ContextTypes.D
         )
         await update.message.reply_text(texto, reply_markup=botao)
 
-    await update.message.reply_text("Selecione qual transação deseja excluir.", reply_markup=teclado_principal)
     return TIPO
 
 async def excluir_transacao_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -383,18 +313,7 @@ async def pagar_despesa_callback(update: Update, context: ContextTypes.DEFAULT_T
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("UPDATE despesas_agendadas SET status='pago' WHERE id=?", (despesa_id,))
         conn.commit()
-    await query.message.reply_text(f"Despesa {despesa_id} marcada como paga.", reply_markup=teclado_principal)
-
-
-async def verificar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text.strip() == "1523":
-        context.user_data['autenticado'] = True
-        await update.message.reply_text("Acesso autorizado ✅", reply_markup=teclado_principal)
-        return TIPO
-    else:
-        await update.message.reply_text("❌ Senha incorreta. Tente novamente:")
-        return 100
-
+    await query.message.reply_text(f"Despesa {despesa_id} marcada como paga. ✅", reply_markup=teclado_principal)
 
 # --- Main ---
 def main():
@@ -403,7 +322,7 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            100: [MessageHandler(filters.TEXT & ~filters.COMMAND, verificar_senha)],
+            AUTENTICACAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, autenticar)],
             TIPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, escolher_tipo)],
             CATEGORIA: [CallbackQueryHandler(categoria_callback)],
             VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
