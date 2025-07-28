@@ -26,7 +26,7 @@ REMOVER_SELECIONAR = 10
 TOKEN = os.environ.get("BOT_TOKEN")
 DB_PATH = 'financeiro.db'
 
-CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", "Adesão APP", "Vendas Créditos"]
+CATEGORIAS_RECEITA = ["Salário mensal", "Vale Alimentação", "Vendas Canais", "Adesão APP", "Vendas Créditos", "Saldo Inicial"]
 CATEGORIAS_DESPESA = ["Alimentação", "Transporte", "Lazer", "Saúde", "Moradia", "Educação", "Outros"]
 
 teclado_principal = ReplyKeyboardMarkup([
