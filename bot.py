@@ -32,6 +32,17 @@ def teclado_voltar_cancelar():
         one_time_keyboard=True
     )
 
+# --- Categoria Callback ---
+async def categoria_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    categoria = query.data
+    context.user_data["categoria"] = categoria
+    context.user_data["tipo"] = "receita" if categoria in CATEGORIAS_RECEITA else "despesa"
+    await query.message.reply_text("Digite o valor:", reply_markup=teclado_voltar_cancelar())
+    return VALOR
+
+# --- Banco de dados ---
 def criar_tabelas():
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS transacoes (
