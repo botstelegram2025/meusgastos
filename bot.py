@@ -11,14 +11,11 @@ from telegram.ext import (
     filters,
 )
 
-# Lê o token do ambiente
 TOKEN = os.environ.get("BOT_TOKEN")
 
-# Banco de dados SQLite
 conn = sqlite3.connect('financeiro.db', check_same_thread=False)
 cursor = conn.cursor()
 
-# Cria a tabela se não existir
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS transacoes (
         id INTEGER PRIMARY KEY,
@@ -31,7 +28,6 @@ cursor.execute('''
 ''')
 conn.commit()
 
-# Funções do banco
 def adicionar_transacao(tipo, categoria, valor, descricao):
     data = datetime.now().strftime('%Y-%m-%d')
     cursor.execute('INSERT INTO transacoes (tipo, categoria, valor, data, descricao) VALUES (?, ?, ?, ?, ?)',
@@ -53,17 +49,14 @@ def calcular_saldo():
     despesas = cursor.fetchone()[0] or 0
     return receitas - despesas
 
-# Estados do ConversationHandler
 TIPO, CATEGORIA, VALOR, DESCRICAO = range(4)
 
-# Categorias predefinidas para receita
 CATEGORIAS_RECEITA = [
     ["Salário mensal", "Vale Alimentação"],
     ["Vendas Canais", "Adesão APP"],
     ["Outra"]
 ]
 
-# Teclado principal com botões para receita e despesa
 TECLADO_PRINCIPAL = ReplyKeyboardMarkup(
     [["➕ Receita", "➖ Despesa"], ["📊 Relatório", "💰 Saldo"]],
     resize_keyboard=True
@@ -81,8 +74,6 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text
     if texto == "➕ Receita":
         context.user_data['tipo'] = 'receita'
-
-        # Mostrar teclado de categorias para receita
         reply_markup = ReplyKeyboardMarkup(CATEGORIAS_RECEITA, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text(
             "📂 Escolha uma categoria para a receita ou selecione 'Outra' para digitar manualmente:",
@@ -121,20 +112,17 @@ async def receber_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if tipo == 'receita':
         if texto == 'Outra':
-            # Usuário quer digitar categoria manualmente
             await update.message.reply_text(
                 "Digite a categoria da receita manualmente:",
                 reply_markup=ReplyKeyboardRemove()
             )
-            return CATEGORIA  # Continua esperando a categoria digitada
+            return CATEGORIA
         else:
-            # Categoria selecionada pelo botão
             context.user_data['categoria'] = texto
             await update.message.reply_text("💵 Agora digite o *valor* (exemplo: 123.45):", parse_mode='Markdown')
             return VALOR
 
     else:
-        # Despesa: categoria digitada manualmente
         if not texto:
             await update.message.reply_text("❌ Categoria inválida. Tente novamente:")
             return CATEGORIA
@@ -161,7 +149,6 @@ async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         descricao = ''
     context.user_data['descricao'] = descricao
 
-    # Salvar no banco
     adicionar_transacao(
         context.user_data['tipo'],
         context.user_data['categoria'],
@@ -185,8 +172,6 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=TECLADO_PRINCIPAL
     )
     return ConversationHandler.END
-
-# Comandos independentes para relatório, deletar e saldo
 
 async def comando_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
