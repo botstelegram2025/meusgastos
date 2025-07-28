@@ -18,13 +18,10 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-# Estados do ConversationHandler
-TIPO, CATEGORIA, VALOR, DESCRICAO = range(4)
+TIPO, CATEGORIA, VALOR, DESCRICAO, RELATORIO = range(5)  # Adicionei RELATORIO
 
-# Token do ambiente
 TOKEN = os.environ.get("BOT_TOKEN")
 
-# Banco SQLite
 conn = sqlite3.connect('financeiro.db', check_same_thread=False)
 cursor = conn.cursor()
 
@@ -48,10 +45,6 @@ def adicionar_transacao(tipo, categoria, valor, descricao):
     )
     conn.commit()
 
-def deletar_transacao(id_):
-    cursor.execute('DELETE FROM transacoes WHERE id = ?', (id_,))
-    conn.commit()
-
 def gerar_relatorio(mes):
     cursor.execute("SELECT tipo, categoria, valor, data FROM transacoes WHERE strftime('%m', data) = ?", (mes,))
     return cursor.fetchall()
@@ -63,7 +56,6 @@ def calcular_saldo():
     despesas = cursor.fetchone()[0] or 0
     return receitas - despesas
 
-# Categorias receita para botão inline
 CATEGORIAS_RECEITA = [
     "Salário mensal",
     "Vale Alimentação",
@@ -71,7 +63,6 @@ CATEGORIAS_RECEITA = [
     "Adesão APP",
 ]
 
-# Teclado principal persistente
 teclado_principal = ReplyKeyboardMarkup(
     [
         [KeyboardButton("Adicionar Receita"), KeyboardButton("Adicionar Despesa")],
@@ -81,8 +72,6 @@ teclado_principal = ReplyKeyboardMarkup(
     resize_keyboard=True,
     one_time_keyboard=False
 )
-
-# --- Handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -95,7 +84,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.lower()
     if texto == "adicionar receita":
-        # Mostrar categorias de receita em inline buttons
         buttons = [
             [InlineKeyboardButton(cat, callback_data=cat)] for cat in CATEGORIAS_RECEITA
         ]
@@ -116,7 +104,7 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Envie o mês do relatório no formato MM (exemplo: 07 para julho):"
         )
-        return VALOR  # Usamos VALOR só para receber entrada do mês no fluxo relatorio
+        return RELATORIO  # Estado específico para relatório
 
     elif texto == "saldo":
         saldo_atual = calcular_saldo()
@@ -187,7 +175,7 @@ async def receber_relatorio_mes(update: Update, context: ContextTypes.DEFAULT_TY
     mes = update.message.text
     if len(mes) != 2 or not mes.isdigit() or not (1 <= int(mes) <= 12):
         await update.message.reply_text("Mês inválido. Envie no formato MM (ex: 07):")
-        return VALOR
+        return RELATORIO
 
     dados = gerar_relatorio(mes.zfill(2))
     if not dados:
@@ -220,12 +208,9 @@ def main():
                 CallbackQueryHandler(categoria_callback),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receber_categoria)
             ],
-            VALOR: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor),
-                # Usado também para relatório:
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_relatorio_mes)
-            ],
+            VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor)],
             DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_descricao)],
+            RELATORIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_relatorio_mes)],
         },
         fallbacks=[CommandHandler('cancelar', cancelar)],
         allow_reentry=True,
