@@ -1,5 +1,3 @@
-# --- CÓDIGO COMPLETO FINALIZADO ---
-
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, ContextTypes
 import sqlite3
@@ -68,6 +66,12 @@ def adicionar_transacao(tipo, categoria, valor, descricao):
                         VALUES (?, ?, ?, ?, ?)''', (tipo, categoria, valor, descricao, datetime.now().strftime("%d/%m/%Y")))
         conn.commit()
 
+def adicionar_despesa_agendada(categoria, valor, vencimento, descricao):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute('''INSERT INTO despesas_agendadas (categoria, valor, vencimento, descricao)
+                        VALUES (?, ?, ?, ?)''', (categoria, valor, vencimento, descricao))
+        conn.commit()
+
 # --- Receber Valor ---
 async def receber_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip().replace(",", ".")
@@ -90,8 +94,46 @@ async def receber_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Transação registrada com sucesso!", reply_markup=teclado_principal())
     return TIPO
 
-# --- Fluxos de conversa (continua abaixo) ---
-# (inclui: remover_transacao, categoria_callback, agendar_categoria, agendar_valor, agendar_vencimento, agendar_descricao)
+# --- Agendar Despesa ---
+async def agendar_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["categoria"] = query.data
+    await query.message.reply_text("Digite o valor da despesa:", reply_markup=teclado_voltar_cancelar())
+    return AGENDAR_VALOR
+
+async def agendar_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip().replace(",", ".")
+    try:
+        valor = float(texto)
+        context.user_data["valor"] = valor
+        await update.message.reply_text("Digite a data de vencimento (DD/MM/AAAA):", reply_markup=teclado_voltar_cancelar())
+        return AGENDAR_VENCIMENTO
+    except ValueError:
+        await update.message.reply_text("Digite um valor válido.", reply_markup=teclado_voltar_cancelar())
+        return AGENDAR_VALOR
+
+async def agendar_vencimento(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    vencimento = update.message.text.strip()
+    try:
+        datetime.strptime(vencimento, "%d/%m/%Y")
+        context.user_data["vencimento"] = vencimento
+        await update.message.reply_text("Descreva essa despesa agendada:", reply_markup=teclado_voltar_cancelar())
+        return AGENDAR_DESCRICAO
+    except ValueError:
+        await update.message.reply_text("Data inválida. Use o formato DD/MM/AAAA.", reply_markup=teclado_voltar_cancelar())
+        return AGENDAR_VENCIMENTO
+
+async def agendar_descricao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    descricao = update.message.text.strip()
+    adicionar_despesa_agendada(
+        context.user_data["categoria"],
+        context.user_data["valor"],
+        context.user_data["vencimento"],
+        descricao
+    )
+    await update.message.reply_text("Despesa agendada com sucesso!", reply_markup=teclado_principal())
+    return TIPO
 
 # --- Ver Relatório ---
 async def solicitar_mes_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -106,7 +148,7 @@ async def gerar_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data_formatada = f"{mes.zfill(2)}/{ano}"
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT tipo, valor FROM transacoes WHERE data LIKE ?", (f"%/{mes.zfill(2)}/{ano}",))
+            cursor.execute("SELECT tipo, valor FROM transacoes WHERE data LIKE ?", (f"__/%.{mes.zfill(2)}/{ano}",))  # <<< Correção do LIKE
             transacoes = cursor.fetchall()
         receitas = sum(v for t, v in transacoes if t == "receita")
         despesas = sum(v for t, v in transacoes if t == "despesa")
@@ -135,7 +177,7 @@ async def ver_despesas_agendadas(update: Update, context: ContextTypes.DEFAULT_T
     await update.callback_query.message.reply_text(texto, parse_mode="Markdown", reply_markup=teclado_principal())
     return TIPO
 
-# --- Fluxo Inicial (senha e tipo) ---
+# --- Fluxo Inicial ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔐 Digite a senha de acesso:")
     return SENHA
@@ -173,10 +215,10 @@ async def escolher_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("Escolha uma opção válida.", reply_markup=teclado_principal())
     return TIPO
 
-# --- Função Main ---
+# --- Main ---
 def main():
     criar_tabelas()
-    app = ApplicationBuilder().token("SEU_TOKEN_AQUI").build()
+    app = ApplicationBuilder().token("SEU_TOKEN_AQUI").build()  # <<< Substitua pelo seu token real
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -192,11 +234,15 @@ def main():
             AGENDAR_VENCIMENTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_vencimento)],
             AGENDAR_DESCRICAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agendar_descricao)],
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("cancel", start)]
     )
 
     app.add_handler(conv_handler)
-    app.run_polling()
+    print("Bot rodando...")
+    try:
+        app.run_polling()
+    except KeyboardInterrupt:
+        print("Bot finalizado.")
 
 if __name__ == '__main__':
     main()
